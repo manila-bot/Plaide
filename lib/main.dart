@@ -8,7 +8,7 @@ import 'package:http/http.dart' as http;
 /// 1. Go to https://aistudio.google.com/apikey
 /// 2. Create an API key (looks like: AIza...)
 /// 3. Paste it here:
-const String geminiApiKey = 'AIzaSyClHQlfS1eUv1c71fBvNm0rYym0n-nepAM';
+const String geminiApiKey = 'Abc';
 
 void main() {
   runApp(const PlaideApp());
