@@ -1,14 +1,11 @@
 // lib/main.dart
 import 'dart:convert';
 import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-/// 1. Go to https://aistudio.google.com/apikey
-/// 2. Create an API key (looks like: AIza...)
-/// 3. Paste it here:
-const String geminiApiKey = 'Abc';
+// IMPORTANT: Replace this with your actual API key.
+const String geminiApiKey = "AXXXX";
 
 void main() {
   runApp(const PlaideApp());
@@ -27,6 +24,16 @@ class PlaideApp extends StatelessWidget {
         useMaterial3: true,
         scaffoldBackgroundColor: const Color(0xFFEFFCF7),
         fontFamily: 'SF Pro',
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: BorderSide.none,
+          ),
+          filled: true,
+          fillColor: Colors.white,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        ),
       ),
       home: const PlaideHome(),
     );
@@ -34,7 +41,6 @@ class PlaideApp extends StatelessWidget {
 }
 
 enum PlaideView { configure, recipe }
-
 enum DetailTab { overview, ingredients, instructions }
 
 class PlaideHome extends StatefulWidget {
@@ -45,13 +51,11 @@ class PlaideHome extends StatefulWidget {
 }
 
 class _PlaideHomeState extends State<PlaideHome> {
-  // Flow state
   PlaideView _view = PlaideView.configure;
   DetailTab _tab = DetailTab.overview;
 
-  // Configure controllers
-  final TextEditingController _dishController =
-      TextEditingController(text: 'Pasta');
+  // Controllers for all input fields
+  final TextEditingController _dishController = TextEditingController();
   final TextEditingController _maxTimeController = TextEditingController();
   final TextEditingController _maxCaloriesController = TextEditingController();
   final TextEditingController _servingsController = TextEditingController();
@@ -59,13 +63,11 @@ class _PlaideHomeState extends State<PlaideHome> {
   final TextEditingController _maxPrepTimeController = TextEditingController();
 
   bool _useCustomSettings = false;
-
-  // API state
   bool _isLoadingText = false;
   bool _isLoadingImage = false;
   String? _errorMessage;
 
-  // Recipe data
+  // Recipe data fields
   String _recipeTitle = '';
   String _overviewText = '';
   List<String> _ingredients = [];
@@ -73,18 +75,22 @@ class _PlaideHomeState extends State<PlaideHome> {
   String _timeText = '';
   String _caloriesText = '';
   String _servingsText = '';
-
-  // Image
   Uint8List? _imageBytes;
 
-  // -------- Helpers --------
+  @override
+  void initState() {
+    super.initState();
+    _dishController.addListener(() => setState(() {}));
+  }
 
+  // Utility to limit generated text length
   String _limitTo200Words(String text) {
     final words = text.split(RegExp(r'\s+'));
     if (words.length <= 200) return text;
-    return words.take(200).join(' ') + ' ...';
+    return words.take(200).join(' ') + ' …';
   }
 
+  // Resets all dynamic recipe data
   void _resetRecipe() {
     setState(() {
       _recipeTitle = '';
@@ -99,102 +105,83 @@ class _PlaideHomeState extends State<PlaideHome> {
     });
   }
 
+  // Parse Gemini text using clear section labels
   void _parseRecipeText(String raw) {
     final text = _limitTo200Words(raw);
-    final lines = text.split('\n').map((l) => l.trim()).toList();
 
-    int idx = 0;
+    final lines = text
+        .split('\n')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
 
-    // Title: first non-empty line
-    while (idx < lines.length && lines[idx].isEmpty) {
-      idx++;
-    }
-    if (idx < lines.length) {
-      _recipeTitle = lines[idx];
-      idx++;
-    }
-
-    // Collect lines until "Ingredients:"
-    final bufferOverview = <String>[];
-    final lowerLines = lines.map((e) => e.toLowerCase()).toList();
-    final ingIndex = lowerLines.indexWhere((l) => l.startsWith('ingredients'));
-    final stepsIndex = lowerLines.indexWhere((l) => l.startsWith('steps'));
-
-    // Extract Time / Servings / Calories from lines near the top
-    for (int i = idx; i < lines.length; i++) {
-      final l = lines[i];
-      final lower = l.toLowerCase();
-      if (lower.startsWith('time:')) {
-        _timeText = l.substring(5).trim();
-      } else if (lower.startsWith('servings:')) {
-        _servingsText = l.substring(9).trim();
-      } else if (lower.startsWith('calories:')) {
-        _caloriesText = l.substring(9).trim();
-      }
-      if (i == ingIndex || i == stepsIndex) break;
+    String _extractValue(String label) {
+      final i = lines.indexWhere(
+          (l) => l.toUpperCase().startsWith('$label:'.toUpperCase()));
+      if (i == -1) return '';
+      final parts = lines[i].split(':');
+      if (parts.length <= 1) return '';
+      return parts.sublist(1).join(':').trim();
     }
 
-    if (ingIndex != -1) {
-      for (int i = idx; i < ingIndex; i++) {
-        if (lines[i].isNotEmpty) {
-          bufferOverview.add(lines[i]);
-        }
-      }
-    } else {
-      for (int i = idx; i < lines.length; i++) {
-        if (lines[i].isNotEmpty) bufferOverview.add(lines[i]);
-      }
-    }
-    _overviewText = bufferOverview.join('\n');
+    _recipeTitle = _extractValue("TITLE");
+    _timeText = _extractValue("TIME");
+    _servingsText = _extractValue("SERVINGS");
+    _caloriesText = _extractValue("CALORIES");
 
-    // Ingredients
+    final overviewIndex =
+        lines.indexWhere((l) => l.toUpperCase().startsWith("OVERVIEW:"));
+    final ingredientsIndex =
+        lines.indexWhere((l) => l.toUpperCase().startsWith("INGREDIENTS:"));
+    final instructionsIndex =
+        lines.indexWhere((l) => l.toUpperCase().startsWith("INSTRUCTIONS:"));
+
+    // OVERVIEW
+    _overviewText = '';
+    if (overviewIndex != -1) {
+      final end = (ingredientsIndex != -1
+              ? ingredientsIndex
+              : (instructionsIndex != -1 ? instructionsIndex : lines.length));
+      final overLines = lines.sublist(overviewIndex + 1, end);
+      _overviewText = overLines.join('\n');
+    }
+
+    // INGREDIENTS
     _ingredients = [];
-    if (ingIndex != -1) {
-      final end = stepsIndex != -1 ? stepsIndex : lines.length;
-      for (int i = ingIndex + 1; i < end; i++) {
-        final l = lines[i];
-        if (l.isEmpty) continue;
-        final cleaned = l.replaceFirst(RegExp(r'^[-•\d\.\) ]+'), '').trim();
-        if (cleaned.isNotEmpty) {
-          _ingredients.add(cleaned);
-        }
-      }
+    if (ingredientsIndex != -1) {
+      final end =
+          instructionsIndex != -1 ? instructionsIndex : lines.length;
+      final ingLines = lines.sublist(ingredientsIndex + 1, end);
+      _ingredients = ingLines
+          .map((l) =>
+              l.replaceFirst(RegExp(r'^[-•\d\.\)\s]+'), '').trim())
+          .where((l) => l.isNotEmpty)
+          .toList();
     }
 
-    // Steps
+    // INSTRUCTIONS
     _steps = [];
-    if (stepsIndex != -1) {
-      for (int i = stepsIndex + 1; i < lines.length; i++) {
-        final l = lines[i];
-        if (l.isEmpty) continue;
-        final cleaned = l.replaceFirst(RegExp(r'^\d+[\).\s]+'), '').trim();
-        if (cleaned.isNotEmpty) {
-          _steps.add(cleaned);
-        }
-      }
+    if (instructionsIndex != -1) {
+      final stepLines = lines.sublist(instructionsIndex + 1);
+      _steps = stepLines
+          .map(
+              (l) => l.replaceFirst(RegExp(r'^\d+[\).\s]+'), '').trim())
+          .where((l) => l.isNotEmpty)
+          .toList();
     }
 
-    if (_ingredients.isEmpty && _steps.isEmpty && _overviewText.isEmpty) {
-      _overviewText = text;
+    // Fallback title if Gemini forgets it
+    if (_recipeTitle.isEmpty && _dishController.text.isNotEmpty) {
+      _recipeTitle = _dishController.text;
     }
   }
 
-  // -------- Gemini TEXT --------
-
+  // Generate recipe text using Gemini Flash
   Future<void> _generateRecipe({required String presetLabel}) async {
     final dish = _dishController.text.trim();
-    if (dish.isEmpty) {
-      setState(() {
-        _errorMessage = 'Please enter a dish or ingredient.';
-      });
-      return;
-    }
 
-    if (geminiApiKey == 'YOUR_GEMINI_API_KEY_HERE' ||
-        geminiApiKey.trim().isEmpty) {
-      setState(() {
-        _errorMessage = 'Please paste your real Gemini API key in main.dart.';
-      });
+    if (dish.isEmpty) {
+      setState(() => _errorMessage = "Please enter a dish.");
       return;
     }
 
@@ -203,78 +190,56 @@ class _PlaideHomeState extends State<PlaideHome> {
     setState(() {
       _isLoadingText = true;
       _isLoadingImage = true;
-      _view = PlaideView.configure; // keep here until recipe text arrives
-      _tab = DetailTab.overview;
+      _errorMessage = null;
     });
 
-    const modelName = 'gemini-2.5-flash';
+    const model = "gemini-2.5-flash";
+
     final uri = Uri.parse(
-      'https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$geminiApiKey',
-    );
+        "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$geminiApiKey");
 
-    final description = StringBuffer()
-      ..write('User wants a recipe for: $dish.\n')
-      ..write('Preset: $presetLabel.\n');
+    // Prompt designed to keep <= 200 words and match tabs
+    final prompt = """
+You are Plaide, an AI recipe assistant.
 
-    if (_useCustomSettings) {
-      if (_maxTimeController.text.trim().isNotEmpty) {
-        description
-          ..write('Max cooking time (minutes): ')
-          ..writeln(_maxTimeController.text.trim());
-      }
-      if (_maxCaloriesController.text.trim().isNotEmpty) {
-        description
-          ..write('Max calories per serving: ')
-          ..writeln(_maxCaloriesController.text.trim());
-      }
-      if (_servingsController.text.trim().isNotEmpty) {
-        description
-          ..write('Servings: ')
-          ..writeln(_servingsController.text.trim());
-      }
-      if (_budgetController.text.trim().isNotEmpty) {
-        description
-          ..write('Max budget (USD): ')
-          ..writeln(_budgetController.text.trim());
-      }
-      if (_maxPrepTimeController.text.trim().isNotEmpty) {
-        description
-          ..write('Max prep time (minutes): ')
-          ..writeln(_maxPrepTimeController.text.trim());
-      }
-    }
+Create a recipe for: "$dish".
 
-    final prompt = '''
-You are a recipe assistant in a mobile app called Plaide.
+Preset selected: $presetLabel
+- If preset is QuickAndLight, keep time short and calories lower.
+- If FamilyFeast, serve 4–6.
+- If HealthyPower, emphasise high protein.
+- If BudgetFriendly, keep ingredients affordable.
+- If DishInput or CustomSettings, just respect the dish name and be balanced.
 
-Goal:
-- Return ONE recipe that matches the description and constraints.
-- Keep the TOTAL response UNDER 200 words.
-- Make it simple and easy for a busy college student.
+HARD CONSTRAINT:
+- TOTAL response MUST be 200 words or less.
 
-Format (VERY IMPORTANT):
-Title
-Time: xx min
-Servings: x
-Calories: (approximate, if possible)
+OUTPUT FORMAT – use these exact labels and line breaks:
 
-Ingredients:
+TITLE: Chicken Rice Bowl
+TIME: 25 min
+SERVINGS: 2
+CALORIES: approx 480
+
+OVERVIEW:
+2–3 sentences describing the dish.
+
+INGREDIENTS:
+- item
 - item
 - item
 
-Steps:
+INSTRUCTIONS:
 1. step
 2. step
 3. step
-
-$description
-''';
+""";
 
     final body = jsonEncode({
-      'contents': [
+      "contents": [
         {
-          'parts': [
-            {'text': prompt}
+          "parts": [
+            {"text": prompt}
           ]
         }
       ]
@@ -283,85 +248,44 @@ $description
     try {
       final resp = await http.post(
         uri,
-        headers: {'Content-Type': 'application/json'},
+        headers: {"Content-Type": "application/json"},
         body: body,
       );
 
-      if (resp.statusCode == 200) {
-        final jsonResp =
-            jsonDecode(resp.body) as Map<String, dynamic>? ?? {};
-        String text = 'No recipe text returned.';
+      final data = jsonDecode(resp.body);
+      final text =
+          data["candidates"][0]["content"]["parts"][0]["text"] ?? "";
 
-        final candidates = jsonResp['candidates'];
-        if (candidates is List && candidates.isNotEmpty) {
-          final first = candidates[0];
-          final content = first['content'];
-          if (content is Map && content['parts'] is List) {
-            final buffer = StringBuffer();
-            for (final part in (content['parts'] as List)) {
-              if (part is Map && part['text'] is String) {
-                buffer.write(part['text']);
-              }
-            }
-            if (buffer.isNotEmpty) {
-              text = buffer.toString();
-            }
-          }
-        }
+      _parseRecipeText(text);
 
-        setState(() {
-          _parseRecipeText(text);
-          _view = PlaideView.recipe;
-          _errorMessage = null;
-        });
+      setState(() => _view = PlaideView.recipe);
 
-        // Fire image generation with combined description
-        final imageDesc = '$dish recipe. $presetLabel. '
-            '${_timeText.isNotEmpty ? "Time: $_timeText. " : ""}'
-            '${_caloriesText.isNotEmpty ? "Calories: $_caloriesText. " : ""}'
-            '${_servingsText.isNotEmpty ? "Servings: $_servingsText. " : ""}';
-        await _generateRecipeImage(imageDesc);
-      } else {
-        setState(() {
-          _errorMessage =
-              'Gemini text error: ${resp.statusCode}\n${resp.body}';
-        });
-      }
+      // Trigger image generation asynchronously after text is received
+      await _generateRecipeImage("$dish, professional food photography");
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Network error while calling Gemini: $e';
-      });
+      print("Text Generation Error: $e");
+      setState(() => _errorMessage = "Could not generate recipe text.");
     } finally {
-      if (mounted) {
-        setState(() {
-          _isLoadingText = false;
-        });
-      }
+      setState(() => _isLoadingText = false);
     }
   }
 
-  // -------- Gemini IMAGE --------
-
+  // Image generation using Gemini Flash Image
   Future<void> _generateRecipeImage(String description) async {
-    setState(() {
-      _isLoadingImage = true;
-      _imageBytes = null;
-    });
+    setState(() => _isLoadingImage = true);
 
-    const imageModelName = 'gemini-2.5-flash-image';
+    const model = "gemini-2.5-flash-image";
+
     final uri = Uri.parse(
-      'https://generativelanguage.googleapis.com/v1beta/models/$imageModelName:generateContent',
-    );
+        "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent");
 
     final body = jsonEncode({
-      'contents': [
+      "contents": [
         {
-          'parts': [
+          "parts": [
             {
-              'text':
-                  'Create a clear, bright, photorealistic food photo for a mobile recipe app. '
-                      'Top-down or 3/4 angle, shallow depth of field, crisp focus on the dish, soft background, '
-                      'natural lighting, 1024x1024 quality. Dish description: $description'
+              "text":
+                  "Generate a high-quality, realistic food photo of: $description. Use vibrant colors and clean lighting."
             }
           ]
         }
@@ -372,182 +296,29 @@ $description
       final resp = await http.post(
         uri,
         headers: {
-          'Content-Type': 'application/json',
-          // For image we send the key as header (works reliably)
-          'x-goog-api-key': geminiApiKey,
+          "Content-Type": "application/json",
+          "x-goog-api-key": geminiApiKey
         },
         body: body,
       );
 
-      if (resp.statusCode != 200) {
-        debugPrint('Image generation error: ${resp.statusCode} ${resp.body}');
-        if (mounted && _errorMessage == null) {
-          setState(() {
-            _errorMessage =
-                'Could not generate image (code ${resp.statusCode}). Check Gemini billing / image access.';
-          });
-        }
-        return;
-      }
+      final parts =
+          jsonDecode(resp.body)["candidates"][0]["content"]["parts"];
 
-      final jsonResp =
-          jsonDecode(resp.body) as Map<String, dynamic>? ?? {};
-      String? base64Image;
-
-      final candidates = jsonResp['candidates'];
-      if (candidates is List && candidates.isNotEmpty) {
-        final first = candidates[0];
-        final content = first['content'];
-        if (content is Map && content['parts'] is List) {
-          for (final part in (content['parts'] as List)) {
-            if (part is Map) {
-              final inline =
-                  (part['inlineData'] ?? part['inline_data']);
-              if (inline is Map && inline['data'] is String) {
-                base64Image = inline['data'] as String;
-                break;
-              }
-            }
-          }
+      for (final p in parts) {
+        final data = p["inlineData"] ?? p["inline_data"];
+        if (data != null && data["data"] is String) {
+          _imageBytes = base64Decode(data["data"]);
         }
-      }
-
-      if (base64Image != null) {
-        final bytes = base64Decode(base64Image);
-        if (mounted) {
-          setState(() {
-            _imageBytes = bytes;
-          });
-        }
-      } else {
-        debugPrint('No inline image data in response: $jsonResp');
       }
     } catch (e) {
-      debugPrint('Image generation network error: $e');
-      if (mounted && _errorMessage == null) {
-        setState(() {
-          _errorMessage = 'Network error while generating image: $e';
-        });
-      }
+      print("Image Generation Error: $e");
     } finally {
-      if (mounted) {
-        setState(() {
-          _isLoadingImage = false;
-        });
-      }
+      setState(() => _isLoadingImage = false);
     }
   }
 
-  // -------- Feedback --------
-
-  void _openFeedbackDialog({required bool liked}) {
-    if (_recipeTitle.isEmpty && _overviewText.isEmpty) return;
-
-    final controller = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        final theme = Theme.of(context);
-        return AlertDialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          backgroundColor: Colors.white,
-          contentPadding: const EdgeInsets.all(20),
-          content: SizedBox(
-            width: 380,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      liked
-                          ? Icons.thumb_up_alt_rounded
-                          : Icons.thumb_down_alt_rounded,
-                      color: liked
-                          ? const Color(0xFF16A34A)
-                          : const Color(0xFFEF4444),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        liked
-                            ? 'Tell us what you liked!'
-                            : 'Help us improve',
-                        style: theme.textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  liked
-                      ? 'What made this recipe appealing to you? Your feedback helps us suggest better recipes.'
-                      : 'What didn\'t work for you? Your feedback helps us improve our suggestions.',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: Colors.grey[700]),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: controller,
-                  minLines: 3,
-                  maxLines: 5,
-                  decoration: InputDecoration(
-                    hintText: liked
-                        ? 'e.g., Perfect cooking time, loved the ingredients, easy to follow...'
-                        : 'e.g., Too many ingredients, cooking time too long, not my taste...',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    filled: true,
-                    fillColor: const Color(0xFFF9FAFB),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Skip'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                        final snack = liked
-                            ? 'Support 👍 feedback recorded (demo).'
-                            : 'Don’t Support 👎 feedback recorded (demo).';
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(snack)),
-                        );
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF10B981),
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      ),
-                      child: const Text('Submit Feedback'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // -------- UI --------
+  // ---------------- UI ----------------
 
   @override
   Widget build(BuildContext context) {
@@ -558,30 +329,7 @@ $description
             constraints: const BoxConstraints(maxWidth: 430),
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF5FFFB),
-                  borderRadius: BorderRadius.circular(32),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.08),
-                      blurRadius: 24,
-                      offset: const Offset(0, 10),
-                    ),
-                  ],
-                ),
-                padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
-                child: Column(
-                  children: [
-                    _buildTopBar(context),
-                    const SizedBox(height: 12),
-                    if (_view == PlaideView.configure)
-                      Expanded(child: _buildConfigureScreen(context))
-                    else
-                      Expanded(child: _buildRecipeScreen(context)),
-                  ],
-                ),
-              ),
+              child: _buildMainCard(context),
             ),
           ),
         ),
@@ -589,198 +337,183 @@ $description
     );
   }
 
-  Widget _buildTopBar(BuildContext context) {
-    final theme = Theme.of(context);
+  Widget _buildMainCard(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5FFFB),
+        borderRadius: BorderRadius.circular(32),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          )
+        ],
+      ),
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
+      child: Column(
+        children: [
+          _buildTopBar(),
+          const SizedBox(height: 12),
+          Expanded(
+            child: _view == PlaideView.configure
+                ? _buildConfigureScreen()
+                : _buildRecipeScreen(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTopBar() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Row(
-          children: [
-            const Icon(Icons.restaurant_menu, color: Color(0xFF10B981)),
-            const SizedBox(width: 4),
+          children: const [
+            Icon(Icons.restaurant_menu, color: Color(0xFF10B981)),
+            SizedBox(width: 8),
             Text(
-              'plaide',
-              style: theme.textTheme.titleMedium?.copyWith(
+              "plaide",
+              style: TextStyle(
                 fontWeight: FontWeight.w700,
-                color: const Color(0xFF16A34A),
+                color: Color(0xFF16A34A),
+                fontSize: 18,
               ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE0FDF2),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: const Text(
-                'Lv1',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF16A34A),
-                ),
-              ),
-            ),
-            const SizedBox(width: 4),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFDE68A),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: const Text(
-                '30pts',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF854D0E),
-                ),
-              ),
-            ),
+            )
           ],
         ),
         Row(
           children: const [
             Icon(Icons.search, size: 20, color: Color(0xFF4B5563)),
             SizedBox(width: 8),
-            Icon(Icons.notifications_none,
-                size: 20, color: Color(0xFF4B5563)),
+            Icon(Icons.notifications_none, size: 20, color: Color(0xFF4B5563)),
             SizedBox(width: 8),
-            Icon(Icons.favorite_border,
-                size: 20, color: Color(0xFF4B5563)),
+            Icon(Icons.favorite_border, size: 20, color: Color(0xFF4B5563)),
           ],
         )
       ],
     );
   }
 
-  // -------- Configure Screen --------
-
-  Widget _buildConfigureScreen(BuildContext context) {
+  // CONFIGURE SCREEN (matches wireframe)
+  Widget _buildConfigureScreen() {
     final theme = Theme.of(context);
+
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           TextButton.icon(
             onPressed: () {},
+            icon: const Icon(Icons.arrow_back_ios_new, size: 14),
+            label: const Text("Back to Search"),
             style: TextButton.styleFrom(
               foregroundColor: const Color(0xFF6B7280),
               padding: EdgeInsets.zero,
               alignment: Alignment.centerLeft,
             ),
-            icon: const Icon(Icons.arrow_back_ios_new, size: 14),
-            label: const Text('Back to Search'),
           ),
           const SizedBox(height: 8),
           Text(
-            'Configure your ${_dishController.text.isEmpty ? "recipe" : _dishController.text} recipe',
+            "Configure your recipe",
             style: theme.textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.w700,
               color: const Color(0xFF111827),
             ),
           ),
-          const SizedBox(height: 10),
-
-          // Dish text field
+          const SizedBox(height: 12),
           TextField(
             controller: _dishController,
             decoration: InputDecoration(
-              labelText: 'Dish',
+              labelText: "e.g: Pasta with tomato sauce",
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
               filled: true,
               fillColor: Colors.white,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             ),
           ),
-          const SizedBox(height: 10),
-
-          // Tag chips row
+          const SizedBox(height: 12),
           Wrap(
-            spacing: 6,
-            runSpacing: 6,
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              'Pasta',
-              'Chicken',
-              'Salad',
-              'Rice Bowl',
-              'Stir Fry',
-              'Soup',
-              'Pizza',
-              'Tacos',
-              'Curry',
-              'Ramen',
-              'Sushi',
-              'Burrito',
-              'Seafood',
-              'Vegan',
-              'Mediterranean',
-            ]
-                .map(
-                  (label) => GestureDetector(
-                    onTap: () {
-                      _dishController.text = label;
-                      setState(() {});
-                    },
-                    child: Chip(
-                      label: Text(label),
-                      backgroundColor: Colors.white,
-                      labelStyle: const TextStyle(fontSize: 12),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 0),
-                      side: const BorderSide(color: Color(0xFFE5E7EB)),
+              "Pasta",
+              "Chicken",
+              "Salad",
+              "Rice Bowl",
+              "Stir Fry",
+              "Soup",
+              "Pizza",
+              "Tacos",
+              "Curry",
+              "Ramen",
+              "Sushi",
+              "Burrito",
+              "Seafood",
+              "Vegan",
+              "Mediterranean",
+            ].map((label) {
+              final isSelected = _dishController.text == label;
+              return GestureDetector(
+                onTap: () {
+                  _dishController.text = isSelected ? "" : label;
+                },
+                child: Chip(
+                  label: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: isSelected
+                          ? Colors.white
+                          : const Color(0xFF4B5563),
                     ),
                   ),
-                )
-                .toList(),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  backgroundColor:
+                      isSelected ? const Color(0xFF22C55E) : Colors.white,
+                  side: BorderSide(
+                    color: isSelected
+                        ? const Color(0xFF22C55E)
+                        : const Color(0xFFE5E7EB),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              );
+            }).toList(),
           ),
           const SizedBox(height: 16),
-
-          // Segmented: Quick Presets / Custom Settings
-          Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFFE5F9EF),
-              borderRadius: BorderRadius.circular(999),
+          ElevatedButton(
+            onPressed: _dishController.text.trim().isNotEmpty && !_isLoadingText
+                ? () => _generateRecipe(presetLabel: "DishInput")
+                : null,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF22C55E),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              disabledBackgroundColor: const Color(0xFFB9E5C5),
             ),
-            padding: const EdgeInsets.all(4),
-            child: Row(
-              children: [
-                _SegmentedButton(
-                  label: 'Quick Presets',
-                  isActive: !_useCustomSettings,
-                  onTap: () {
-                    setState(() {
-                      _useCustomSettings = false;
-                    });
-                  },
-                ),
-                _SegmentedButton(
-                  label: 'Custom Settings',
-                  isActive: _useCustomSettings,
-                  onTap: () {
-                    setState(() {
-                      _useCustomSettings = true;
-                    });
-                  },
-                ),
-              ],
+            child: Text(
+              _isLoadingText ? "Generating..." : "Generate Recipe",
+              style: const TextStyle(fontSize: 16),
             ),
           ),
-          const SizedBox(height: 14),
-
-          if (!_useCustomSettings) _buildPresetCards(context),
-          if (_useCustomSettings) _buildCustomSettings(context),
-
+          const SizedBox(height: 16),
+          _buildPresetSelector(theme),
+          const SizedBox(height: 16),
+          _useCustomSettings ? _buildCustomSettings() : _buildQuickPresets(),
           if (_errorMessage != null) ...[
             const SizedBox(height: 8),
             Text(
               _errorMessage!,
-              style: const TextStyle(color: Colors.red, fontSize: 12),
+              style: const TextStyle(color: Colors.red),
             ),
           ],
         ],
@@ -788,240 +521,144 @@ $description
     );
   }
 
-  Widget _buildPresetCards(BuildContext context) {
-    Widget presetCard(
-        {required IconData icon,
-        required String title,
-        required String subtitle,
-        required String presetLabel}) {
-      return Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: const Color(0xFF16A34A)),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 14),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                        fontSize: 11, color: Color(0xFF6B7280)),
-                  ),
-                ],
-              ),
-            ),
-            ElevatedButton(
-              onPressed: _isLoadingText
-                  ? null
-                  : () => _generateRecipe(presetLabel: presetLabel),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF22C55E),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(999)),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              ),
-              child: _isLoadingText
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor:
-                            AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : const Text('Generate'),
-            )
-          ],
-        ),
-      );
-    }
+  // Quick Presets UI
+  Widget _buildQuickPresets() {
+    final presets = [
+      {
+        'icon': Icons.flash_on,
+        'title': 'Quick & Light',
+        'subtitle': '20 min • <400 cal',
+        'label': 'QuickAndLight'
+      },
+      {
+        'icon': Icons.group,
+        'title': 'Family Feast',
+        'subtitle': '60 min • serves 4-6',
+        'label': 'FamilyFeast'
+      },
+      {
+        'icon': Icons.accessibility_new,
+        'title': 'Healthy Power',
+        'subtitle': '<350 cal • high protein',
+        'label': 'HealthyPower'
+      },
+      {
+        'icon': Icons.attach_money,
+        'title': 'Budget Friendly',
+        'subtitle': '< \$10 per serving',
+        'label': 'BudgetFriendly'
+      },
+    ];
 
     return Column(
-      children: [
-        presetCard(
-          icon: Icons.bolt,
-          title: 'Quick & Light',
-          subtitle: '20 min  •  <400 cal',
-          presetLabel: 'Quick & Light (<30 min, <400 cal)',
-        ),
-        presetCard(
-          icon: Icons.family_restroom,
-          title: 'Family Feast',
-          subtitle: '60 min  •  serves 4–6',
-          presetLabel: 'Family Feast',
-        ),
-        presetCard(
-          icon: Icons.fitness_center,
-          title: 'Healthy Power',
-          subtitle: '<350 cal  •  high protein',
-          presetLabel: 'Healthy Power',
-        ),
-        presetCard(
-          icon: Icons.attach_money,
-          title: 'Budget Friendly',
-          subtitle: '< \$10 per serving',
-          presetLabel: 'Budget Friendly',
-        ),
-      ],
+      children: presets.map((preset) {
+        final enabled =
+            _dishController.text.trim().isNotEmpty && !_isLoadingText;
+        return _PresetTile(
+          icon: preset['icon'] as IconData,
+          title: preset['title'] as String,
+          subtitle: preset['subtitle'] as String,
+          onGenerate: enabled
+              ? () => _generateRecipe(
+                  presetLabel: preset['label'] as String,
+                )
+              : null,
+          isEnabled: enabled,
+        );
+      }).toList(),
     );
   }
 
-  Widget _buildCustomSettings(BuildContext context) {
-    Widget field(
-        {required String label,
-        required String hint,
-        required TextEditingController controller,
-        TextInputType keyboardType = TextInputType.number}) {
-      return Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 12,
-                color: Color(0xFF6B7280),
-              ),
-            ),
-            const SizedBox(height: 4),
-            TextField(
-              controller: controller,
-              keyboardType: keyboardType,
-              decoration: InputDecoration(
-                hintText: hint,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                filled: true,
-                fillColor: Colors.white,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
+  // Custom Settings UI
+  Widget _buildCustomSettings() {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            field(
-              label: 'Max Cooking Time (minutes)',
-              hint: 'e.g., 30',
-              controller: _maxTimeController,
+        _buildCustomInputField(
+            _maxPrepTimeController, "Max Prep Time (min)", "e.g. 15"),
+        const SizedBox(height: 12),
+        _buildCustomInputField(
+            _maxCaloriesController, "Max Calories", "e.g. 500"),
+        const SizedBox(height: 12),
+        _buildCustomInputField(_servingsController, "Servings", "e.g. 4"),
+        const SizedBox(height: 12),
+        _buildCustomInputField(_budgetController, "Max Budget (\$)", "e.g. 15"),
+        const SizedBox(height: 20),
+        ElevatedButton(
+          onPressed: _dishController.text.trim().isNotEmpty && !_isLoadingText
+              ? () => _generateRecipe(presetLabel: "CustomSettings")
+              : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF22C55E),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
             ),
-            const SizedBox(width: 10),
-            field(
-              label: 'Max Calories',
-              hint: 'e.g., 500',
-              controller: _maxCaloriesController,
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            field(
-              label: 'Servings',
-              hint: 'e.g., 4',
-              controller: _servingsController,
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(width: 10),
-            field(
-              label: 'Max Budget (\$)',
-              hint: 'e.g., 15',
-              controller: _budgetController,
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            field(
-              label: 'Max Prep Time (minutes)',
-              hint: 'e.g., 15',
-              controller: _maxPrepTimeController,
-            ),
-            const SizedBox(width: 10),
-            const Spacer(),
-          ],
-        ),
-        const SizedBox(height: 14),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: _isLoadingText
-                ? null
-                : () => _generateRecipe(presetLabel: 'Custom Settings'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF22C55E),
-              foregroundColor: Colors.white,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(999),
-              ),
-            ),
-            child: _isLoadingText
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor:
-                          AlwaysStoppedAnimation<Color>(Colors.white),
-                    ),
-                  )
-                : const Text('Generate Custom Recipe'),
+            disabledBackgroundColor: const Color(0xFFB9E5C5),
           ),
-        ),
+          child: const Text("Generate Custom Recipe"),
+        )
       ],
     );
   }
 
-  // -------- Recipe Screen --------
+  Widget _buildCustomInputField(
+      TextEditingController controller, String label, String hint) {
+    return TextField(
+      controller: controller,
+      keyboardType: TextInputType.number,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        labelStyle: const TextStyle(color: Color(0xFF4B5563)),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
 
-  Widget _buildRecipeScreen(BuildContext context) {
-    final theme = Theme.of(context);
+  Widget _buildPresetSelector(ThemeData theme) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFE5F9EF),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      padding: const EdgeInsets.all(4),
+      child: Row(
+        children: [
+          _SegmentButton(
+            label: "Quick Presets",
+            isActive: !_useCustomSettings,
+            onTap: () => setState(() => _useCustomSettings = false),
+          ),
+          _SegmentButton(
+            label: "Custom Settings",
+            isActive: _useCustomSettings,
+            onTap: () => setState(() => _useCustomSettings = true),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // RECIPE RESULT SCREEN (matches wireframe)
+  Widget _buildRecipeScreen() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         TextButton.icon(
-          onPressed: () {
-            setState(() {
-              _view = PlaideView.configure;
-            });
-          },
+          onPressed: () => setState(() => _view = PlaideView.configure),
+          icon: const Icon(Icons.arrow_back_ios_new, size: 14),
+          label: const Text("Back to Search"),
           style: TextButton.styleFrom(
             foregroundColor: const Color(0xFF6B7280),
             padding: EdgeInsets.zero,
             alignment: Alignment.centerLeft,
           ),
-          icon: const Icon(Icons.arrow_back_ios_new, size: 14),
-          label: const Text('Back to Search'),
         ),
-        const SizedBox(height: 4),
-
-        // Hero card
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -1029,129 +666,72 @@ $description
           ),
           child: Column(
             children: [
-              // Image
               ClipRRect(
                 borderRadius:
                     const BorderRadius.vertical(top: Radius.circular(24)),
                 child: AspectRatio(
                   aspectRatio: 16 / 9,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      if (_imageBytes != null)
-                        Image.memory(
-                          _imageBytes!,
-                          fit: BoxFit.cover,
-                        )
-                      else
-                        Container(
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [Color(0xFFE0F2FE), Color(0xFFD1FAE5)],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                          ),
-                          child: Center(
-                            child: Text(
-                              _isLoadingImage
-                                  ? 'Generating image...'
-                                  : 'Your dish photo will appear here.',
-                              style: TextStyle(
-                                color: Colors.grey[700],
-                                fontSize: 13,
-                              ),
-                            ),
+                  child: _imageBytes != null
+                      ? Image.memory(_imageBytes!, fit: BoxFit.cover)
+                      : Center(
+                          child: Text(
+                            _isLoadingImage
+                                ? "Generating image..."
+                                : "Your food photo will appear here",
+                            style: const TextStyle(color: Colors.grey),
                           ),
                         ),
-                      if (_isLoadingImage)
-                        const Center(
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        ),
-                    ],
-                  ),
                 ),
               ),
-
-              // Title + tags
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Wrap(
                       spacing: 6,
-                      children: const [
-                        _SmallPill(label: 'pasta'),
-                        _SmallPill(label: 'italian'),
+                      children: [
+                        if (_dishController.text.isNotEmpty)
+                          _TagPill(_dishController.text),
+                        const _TagPill("recipe"),
                       ],
                     ),
                     const SizedBox(height: 6),
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         Expanded(
                           child: Text(
                             _recipeTitle.isEmpty
-                                ? 'Your AI recipe'
+                                ? "Your AI Recipe"
                                 : _recipeTitle,
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: const Color(0xFF111827),
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF111827),
                             ),
                           ),
                         ),
                         IconButton(
                           icon: const Icon(Icons.favorite_border),
                           onPressed: () {},
-                        ),
+                        )
                       ],
                     ),
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        _TagChip(
-                          icon: Icons.schedule,
-                          label: _timeText.isEmpty
-                              ? '24 min'
-                              : _timeText,
-                        ),
+                        _InfoTag(Icons.schedule,
+                            _timeText.isEmpty ? "Time" : _timeText),
                         const SizedBox(width: 6),
-                        _TagChip(
-                          icon: Icons.local_fire_department,
-                          label: _caloriesText.isEmpty
-                              ? '540 cal'
+                        _InfoTag(
+                          Icons.local_fire_department,
+                          _caloriesText.isEmpty
+                              ? "Calories"
                               : _caloriesText,
                         ),
                         const SizedBox(width: 6),
-                        _TagChip(
-                          icon: Icons.restaurant,
-                          label: _servingsText.isEmpty
-                              ? '4 servings'
-                              : _servingsText,
-                        ),
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFDCFCE7),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: const Text(
-                            'Easy',
-                            style: TextStyle(
-                              color: Color(0xFF15803D),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
+                        _InfoTag(Icons.restaurant,
+                            _servingsText.isEmpty ? "Servings" : _servingsText),
                       ],
                     ),
                   ],
@@ -1160,141 +740,72 @@ $description
             ],
           ),
         ),
-
-        const SizedBox(height: 10),
-
-        // Tabs
+        const SizedBox(height: 12),
         Row(
           children: [
-            _TabLabel(
-              label: 'Overview',
-              isActive: _tab == DetailTab.overview,
-              onTap: () {
-                setState(() {
-                  _tab = DetailTab.overview;
-                });
-              },
-            ),
+            _Tab("Overview", _tab == DetailTab.overview,
+                () => setState(() => _tab = DetailTab.overview)),
             const SizedBox(width: 16),
-            _TabLabel(
-              label: 'Ingredients',
-              isActive: _tab == DetailTab.ingredients,
-              onTap: () {
-                setState(() {
-                  _tab = DetailTab.ingredients;
-                });
-              },
-            ),
+            _Tab("Ingredients", _tab == DetailTab.ingredients,
+                () => setState(() => _tab = DetailTab.ingredients)),
             const SizedBox(width: 16),
-            _TabLabel(
-              label: 'Instructions',
-              isActive: _tab == DetailTab.instructions,
-              onTap: () {
-                setState(() {
-                  _tab = DetailTab.instructions;
-                });
-              },
-            ),
+            _Tab("Instructions", _tab == DetailTab.instructions,
+                () => setState(() => _tab = DetailTab.instructions)),
           ],
         ),
-        const SizedBox(height: 4),
-        const Divider(height: 1),
-
-        const SizedBox(height: 6),
-        Expanded(
-          child: _buildTabContent(),
-        ),
-
+        const Divider(),
+        Expanded(child: _buildTabContent()),
         const SizedBox(height: 8),
-
-        // Feedback buttons
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(
-              children: [
-                ElevatedButton.icon(
-                  onPressed: _recipeTitle.isEmpty
-                      ? null
-                      : () => _openFeedbackDialog(liked: true),
-                  icon: const Icon(Icons.thumb_up, size: 18),
-                  label: const Text(
-                    'I Like This',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF22C55E),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 8),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: _recipeTitle.isEmpty
+                    ? null
+                    : () => _openFeedbackDialog(liked: true),
+                icon: const Icon(Icons.thumb_up),
+                label: const Text("Support"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF22C55E),
+                  foregroundColor: Colors.white,
                 ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: _recipeTitle.isEmpty
-                      ? null
-                      : () => _openFeedbackDialog(liked: false),
-                  icon: const Icon(Icons.thumb_down, size: 18),
-                  label: const Text(
-                    'Not for Me',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFF97373),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 8),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: _recipeTitle.isEmpty
+                    ? null
+                    : () => _openFeedbackDialog(liked: false),
+                icon: const Icon(Icons.thumb_down),
+                label: const Text("Don’t Support"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFF97373),
+                  foregroundColor: Colors.white,
                 ),
-              ],
+              ),
             ),
           ],
         ),
-        const SizedBox(height: 6),
-
-        // Bottom actions
+        const SizedBox(height: 10),
         Row(
           children: [
             Expanded(
               child: OutlinedButton(
-                onPressed: () {
-                  // Try another recipe (same settings)
-                  _generateRecipe(
-                      presetLabel:
-                          _useCustomSettings ? 'Custom Settings' : 'Quick & Light');
-                },
+                onPressed: () =>
+                    _generateRecipe(presetLabel: "TryAnother"),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFF22C55E),
                   side: const BorderSide(color: Color(0xFF22C55E)),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(999),
-                  ),
                 ),
-                child: const Text('Try Another Recipe'),
+                child: const Text("Try Another Recipe"),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
               child: OutlinedButton(
-                onPressed: () {
-                  setState(() {
-                    _view = PlaideView.configure;
-                  });
-                },
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF4B5563),
-                  side: const BorderSide(color: Color(0xFFD1D5DB)),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-                child: const Text('New Search'),
+                onPressed: () => setState(() => _view = PlaideView.configure),
+                child: const Text("New Search"),
               ),
             ),
           ],
@@ -1306,177 +817,157 @@ $description
   Widget _buildTabContent() {
     switch (_tab) {
       case DetailTab.overview:
-        return _buildOverviewTab();
+        return SingleChildScrollView(
+          child: Text(
+            _overviewText.isEmpty && !_isLoadingText
+                ? "Overview text will appear here."
+                : _overviewText,
+            style: const TextStyle(fontSize: 13),
+          ),
+        );
       case DetailTab.ingredients:
-        return _buildIngredientsTab();
+        if (_ingredients.isEmpty) {
+          return const Center(
+            child: Text(
+              "Ingredients will appear here.",
+              style: TextStyle(color: Colors.grey),
+            ),
+          );
+        }
+        return ListView.builder(
+          itemCount: _ingredients.length,
+          itemBuilder: (_, i) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  const Icon(Icons.circle,
+                      size: 6, color: Color(0xFF22C55E)),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(_ingredients[i])),
+                ],
+              ),
+            );
+          },
+        );
       case DetailTab.instructions:
-        return _buildInstructionsTab();
+        if (_steps.isEmpty) {
+          return const Center(
+            child: Text(
+              "Instructions will appear here.",
+              style: TextStyle(color: Colors.grey),
+            ),
+          );
+        }
+        return ListView.builder(
+          itemCount: _steps.length,
+          itemBuilder: (_, i) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 22,
+                    height: 22,
+                    alignment: Alignment.center,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF22C55E),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Text(
+                      "${i + 1}",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(_steps[i])),
+                ],
+              ),
+            );
+          },
+        );
     }
   }
 
-  Widget _buildOverviewTab() {
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_overviewText.isNotEmpty)
-            Text(
-              _overviewText,
-              style: const TextStyle(fontSize: 13, height: 1.3),
-            ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEFFDF5),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+  // Custom modal for feedback (Support / Don’t Support)
+  void _openFeedbackDialog({required bool liked}) {
+    if (_recipeTitle.isEmpty) return;
+    final controller = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
               children: [
-                const Text(
-                  'Recipe Highlights',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
+                Icon(liked ? Icons.thumb_up : Icons.thumb_down,
+                    color: liked ? Colors.green : Colors.red),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    liked ? "Tell us what you liked!" : "Help us improve",
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 6,
-                  children: [
-                    _HighlightRow(
-                      icon: Icons.schedule,
-                      label: _timeText.isEmpty ? '≈ 24 min total' : _timeText,
-                    ),
-                    _HighlightRow(
-                      icon: Icons.local_fire_department,
-                      label: _caloriesText.isEmpty
-                          ? '≈ 560 calories'
-                          : _caloriesText,
-                    ),
-                    _HighlightRow(
-                      icon: Icons.restaurant,
-                      label: _servingsText.isEmpty
-                          ? 'Serves 4'
-                          : _servingsText,
-                    ),
-                    const _HighlightRow(
-                      icon: Icons.emoji_emotions_outlined,
-                      label: 'Easy',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Estimated cost:  \$12–20',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF4B5563),
-                  ),
-                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                )
               ],
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildIngredientsTab() {
-    if (_ingredients.isEmpty) {
-      return const Center(
-        child: Text(
-          'Ingredients will appear here.',
-          style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
-        ),
-      );
-    }
-
-    return ListView.separated(
-      itemCount: _ingredients.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 6),
-      itemBuilder: (context, index) {
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Icon(Icons.circle,
-                size: 6, color: Color(0xFF16A34A)),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _ingredients[index],
-                style: const TextStyle(fontSize: 13),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildInstructionsTab() {
-    if (_steps.isEmpty) {
-      return const Center(
-        child: Text(
-          'Instructions will appear here.',
-          style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
-        ),
-      );
-    }
-
-    return ListView.separated(
-      itemCount: _steps.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, index) {
-        final stepNumber = index + 1;
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 22,
-              height: 22,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: const Color(0xFF22C55E),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                '$stepNumber',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              maxLines: 4,
+              decoration: InputDecoration(
+                hintText: liked
+                    ? "What worked well for you?"
+                    : "What didn’t work for you?",
+                filled: true,
+                fillColor: const Color(0xFFF3F4F6),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _steps[index],
-                style: const TextStyle(fontSize: 13, height: 1.3),
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF22C55E),
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text("Submit"),
               ),
-            ),
+            )
           ],
-        );
-      },
+        ),
+      ),
     );
   }
 }
 
-// ---------- Small UI components ----------
+// ----------------------------------------------------------
+// SMALL UI COMPONENTS
+// ----------------------------------------------------------
 
-class _SegmentedButton extends StatelessWidget {
+class _SegmentButton extends StatelessWidget {
   final String label;
   final bool isActive;
   final VoidCallback onTap;
 
-  const _SegmentedButton({
-    required this.label,
-    required this.isActive,
-    required this.onTap,
-  });
+  const _SegmentButton(
+      {required this.label, required this.isActive, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -1484,24 +975,28 @@ class _SegmentedButton extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
-            color:
-                isActive ? Colors.white : Colors.transparent,
+            color: isActive ? Colors.white : Colors.transparent,
             borderRadius: BorderRadius.circular(999),
+            boxShadow: isActive
+                ? [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.08),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
           ),
           alignment: Alignment.center,
           child: Text(
             label,
             style: TextStyle(
-              fontSize: 13,
-              fontWeight:
-                  isActive ? FontWeight.w600 : FontWeight.w400,
-              color: isActive
-                  ? const Color(0xFF10B981)
-                  : const Color(0xFF6B7280),
+              color:
+                  isActive ? const Color(0xFF10B981) : const Color(0xFF6B7280),
+              fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
             ),
           ),
         ),
@@ -1510,10 +1005,93 @@ class _SegmentedButton extends StatelessWidget {
   }
 }
 
-class _SmallPill extends StatelessWidget {
-  final String label;
+class _PresetTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback? onGenerate;
+  final bool isEnabled;
 
-  const _SmallPill({required this.label});
+  const _PresetTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onGenerate,
+    required this.isEnabled,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          )
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            color: isEnabled ? const Color(0xFF22C55E) : const Color(0xFF9CA3AF),
+            size: 24,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: Color(0xFF111827),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          ElevatedButton(
+            onPressed: onGenerate,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF22C55E),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              minimumSize: const Size(0, 0),
+              disabledBackgroundColor: const Color(0xFFB9E5C5),
+            ),
+            child: const Text("Generate"),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TagPill extends StatelessWidget {
+  final String label;
+  const _TagPill(this.label);
 
   @override
   Widget build(BuildContext context) {
@@ -1521,25 +1099,21 @@ class _SmallPill extends StatelessWidget {
       padding:
           const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.5),
+        color: Colors.black.withOpacity(0.55),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
         label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 11,
-        ),
+        style: const TextStyle(color: Colors.white, fontSize: 11),
       ),
     );
   }
 }
 
-class _TagChip extends StatelessWidget {
+class _InfoTag extends StatelessWidget {
   final IconData icon;
   final String label;
-
-  const _TagChip({required this.icon, required this.label});
+  const _InfoTag(this.icon, this.label);
 
   @override
   Widget build(BuildContext context) {
@@ -1551,79 +1125,45 @@ class _TagChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, size: 12, color: const Color(0xFF6B7280)),
           const SizedBox(width: 4),
-          Text(
-            label,
-            style: const TextStyle(
-                fontSize: 11, color: Color(0xFF4B5563)),
-          ),
+          Text(label, style: const TextStyle(fontSize: 11)),
         ],
       ),
     );
   }
 }
 
-class _TabLabel extends StatelessWidget {
+class _Tab extends StatelessWidget {
   final String label;
-  final bool isActive;
+  final bool active;
   final VoidCallback onTap;
-
-  const _TabLabel(
-      {required this.label, required this.isActive, required this.onTap});
+  const _Tab(this.label, this.active, this.onTap);
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             label,
             style: TextStyle(
               fontSize: 13,
-              fontWeight:
-                  isActive ? FontWeight.w600 : FontWeight.w400,
-              color: isActive
-                  ? const Color(0xFF111827)
-                  : const Color(0xFF9CA3AF),
+              color:
+                  active ? const Color(0xFF111827) : const Color(0xFF9CA3AF),
+              fontWeight: active ? FontWeight.bold : FontWeight.normal,
             ),
           ),
           const SizedBox(height: 4),
           Container(
             width: 60,
             height: 2,
-            color: isActive
-                ? const Color(0xFF22C55E)
-                : Colors.transparent,
-          ),
+            color: active ? const Color(0xFF22C55E) : Colors.transparent,
+          )
         ],
       ),
-    );
-  }
-}
-
-class _HighlightRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-
-  const _HighlightRow({required this.icon, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 14, color: const Color(0xFF16A34A)),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12),
-        ),
-      ],
     );
   }
 }
